@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Node Servers</title>
+</head>
+<body>
+    <h1>Node Servers</h1>
+    {{range .}}
+    <h2>Node Server: Port {{.Port}}, Name {{.Name}}</h2>
+    <ul id="fileList-{{.Port}}">
+        <!-- 파일 목록은 여기에 표시됩니다 -->
+    </ul>
+    <form id="uploadForm-{{.Port}}" enctype="multipart/form-data">
+        <input type="file" name="file" />
+        <input type="button" value="Upload to Node Server" onclick="uploadFile('{{.Port}}')" />
+    </form>
+    <input type="text" id="fileName-{{.Port}}" placeholder="Enter file name to download">
+    <input type="button" value="Download from Node Server" onclick="downloadFile('{{.Port}}')" />
+    {{end}}
+
+    <script>
+        function uploadFile(port) {
+            var form = document.getElementById('uploadForm-' + port);
+            var fileInput = form.querySelector('input[type=file]');
+            var file = fileInput.files[0];
+
+            var formData = new FormData();
+            formData.append('file', file);
+
+            fetch('http://localhost:' + port + '/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                alert('File uploaded successfully to port ' + port);
+                fetchFileList(port); // 파일 업로드 후 파일 목록 다시 가져오기
+            })
+            .catch(error => alert('Error uploading file: ' + error.message));
+        }
+
+        function fetchFileList(port) {
+            fetch(`http://localhost:${port}/fileList`, {
+                method: 'GET'
+            })
+            .then(response => response.json())
+            .then(files => {
+                displayFiles(port, files);
+            })
+            .catch(error => {
+                console.error('Error fetching file list:', error);
+                alert('Error fetching file list');
+            });
+        }
+
+        function displayFiles(port, files) {
+            var fileListElement = document.getElementById(`fileList-${port}`);
+            fileListElement.innerHTML = '';
+
+            files.forEach(file => {
+                var listItem = document.createElement('li');
+                var link = document.createElement('a');
+                link.href = `http://localhost:${port}/download?file=${file}`;
+                link.textContent = file;
+                listItem.appendChild(link);
+                fileListElement.appendChild(listItem);
+            });
+        }
+
+        function downloadFile(port) {
+            var fileName = document.getElementById('fileName-' + port).value;
+
+            fetch(`http://localhost:${port}/download?file=${fileName}`, {
+                method: 'GET'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                alert('File downloaded successfully from port ' + port);
+            })
+            .catch(error => alert('Error downloading file: ' + error.message));
+        }
+
+        // 초기에 각 노드의 파일 목록을 가져옵니다
+        /*var nodeInfoArr = JSON.parse('{{ . }}')
+        nodeInfoArr.forEach(node => {
+            fetchFileList(node.Port);
+        });*/
+    </script>
+</body>
+</html>
