@@ -8,12 +8,15 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 )
 
 var nodes map[string]net.Conn
 
 func main() {
+	nodes = make(map[string]net.Conn)
+
 	args := os.Args
 
 	if len(args) < 2 {
@@ -21,7 +24,7 @@ func main() {
 		return
 	}
 	port := args[1]
-	nodePort, err := strconv.Atoi(port)
+	_, err := strconv.Atoi(port)
 	if err != nil {
 		fmt.Println("node 포트를 정수로 입력해주세요")
 	}
@@ -45,39 +48,26 @@ func main() {
 	}()
 	go func() {
 		defer wg.Done()
-		connectHeadServer(headAddress, nodePort)
+		connectHeadServer(headAddress, nodeAddress)
 	}()
 
 	wg.Wait()
 }
 
-func connectHeadServer(headAddress string, nodePort int) {
+func connectHeadServer(headAddress string, nodeAddress string) {
 	connHead, err := net.Dial("tcp", headAddress)
 	if err != nil {
 		fmt.Printf("통괄서버 연결 실패: %s\n", err)
 		return
 	}
 
-	nodeData := make([]byte, 1024)
-	n, err := connHead.Read(nodeData)
+	_, err = connHead.Write([]byte(nodeAddress))
 	if err != nil {
-		fmt.Printf("nodes 수신 오류: %s\n", err)
-		return
-	}
-	fmt.Print("nodes 크기:", n)
-
-	var receiveNodeMap map[string]string
-	err = json.Unmarshal(nodeData, &receiveNodeMap)
-	if err != nil {
-		fmt.Printf("노드 데이터 역직렬화 실패:%s\n", err)
+		fmt.Printf("서버에게 ListenPort 전달 실패: %s\n", err)
 		return
 	}
 
-	//실행 중인 노드에 커넥트
-	nodes = make(map[string]net.Conn)
-	for _, nodeAddress := range receiveNodeMap {
-		connectNodeServer(nodeAddress)
-	}
+	connectNodes(connHead, nodeAddress)
 
 	fmt.Println("작동 준비 완료")
 
@@ -90,13 +80,14 @@ func connectHeadServer(headAddress string, nodePort int) {
 			fmt.Printf("서버로부터 입력 에러:%s\n", err)
 			return
 		}
+		message = strings.TrimSpace(message)
 
 		switch message {
 		case "전체":
 			fmt.Println("전체")
 			//다른 노드로 전달
 			for _, node := range nodes {
-				node.Write([]byte(message))
+				node.Write([]byte(message + "\n"))
 			}
 		case "단일":
 			fmt.Println("단일")
@@ -106,14 +97,46 @@ func connectHeadServer(headAddress string, nodePort int) {
 	}
 }
 
-func connectNodeServer(nodeAddress string) {
-	connNode, err := net.Dial("tcp", nodeAddress)
+func connectNodes(connHead net.Conn, nodeAddress string) {
+	//연결중인 노드 정보 받아오기
+	nodeData := make([]byte, 1024)
+	n, err := connHead.Read(nodeData)
 	if err != nil {
-		fmt.Printf("노드(%s) 연결 실패:%s\n", nodeAddress, err)
+		fmt.Printf("nodes 수신 오류: %s\n", err)
 		return
 	}
 
-	nodes[connNode.RemoteAddr().String()] = connNode
+	var receivedMap map[string]map[string]string
+	err = json.Unmarshal(nodeData[:n], &receivedMap)
+	if err != nil {
+		fmt.Printf("노드 데이터 역직렬화 실패:%s\n", err)
+		return
+	}
+
+	//실행 중인 노드에 커넥트
+	for _, nodeData := range receivedMap {
+		connectNodeListener(nodeData["listenPort"], nodeAddress)
+	}
+}
+
+func connectNodeListener(nodeListenPort string, thisListenPort string) {
+	connNode, err := net.Dial("tcp", nodeListenPort)
+	if err != nil {
+		fmt.Printf("노드(%s) 연결 실패:%s\n", nodeListenPort, err)
+		return
+	}
+
+	//승인해준 노드에게 자신의 ListenPort 전송
+	_, err = connNode.Write([]byte(thisListenPort))
+	if err != nil {
+		fmt.Printf("노드(%s)에게 ListenPort전달 실패:%s\n", nodeListenPort, err)
+		return
+	}
+
+	fmt.Printf("노드(%s)와 연결\n", nodeListenPort)
+	nodes[nodeListenPort] = connNode
+
+	go handleNode(connNode, nodeListenPort)
 }
 
 func runNodeServer(ln net.Listener) {
@@ -125,21 +148,34 @@ func runNodeServer(ln net.Listener) {
 			log.Println("노드 연결 실패:", err)
 			continue
 		}
-		fmt.Printf("다른 노드 연결: %s\n", conn.RemoteAddr().String())
-		nodes[conn.RemoteAddr().String()] = conn
+
+		//승인한 노드의 ListenPort 받아오기
+		buffer := make([]byte, 1024)
+		bytesRead, err := conn.Read(buffer)
+		if err != nil {
+			fmt.Printf("노드 ListenPort 입력 오류:%s\n", err)
+			return
+		}
+		listenPort := string(buffer[:bytesRead])
+
+		fmt.Printf("노드(%s)와 연결\n", listenPort)
+		nodes[listenPort] = conn
+
+		go handleNode(conn, listenPort)
 	}
 }
 
-func handleNode(conn net.Conn) {
+func handleNode(conn net.Conn, nodeAddress string) {
 	defer conn.Close()
 
 	for {
 		message, err := bufio.NewReader(conn).ReadString('\n')
+		message = strings.TrimSpace(message)
 		if err != nil {
-			fmt.Printf("노드(%s)로부터 입력 오류:%s\n", conn.RemoteAddr().String(), err)
+			fmt.Printf("노드(%s)와 연결끊김\n", nodeAddress)
 			return
 		}
 
-		fmt.Printf("노드(%s)로부터의 message:%s\n", conn.RemoteAddr().String(), message)
+		fmt.Printf("노드(%s)로부터의 message:%s\n", nodeAddress, message)
 	}
 }
