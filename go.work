@@ -1,8 +1,7 @@
 go 1.21.5
 
 use (
-	./client
-	./node
 	./tcp_network
 	./tcp_head
+	./tcp_node
 )
