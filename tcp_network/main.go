@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var clients []net.Conn
+
 func main() {
 	args := os.Args
 
@@ -17,18 +19,13 @@ func main() {
 		return
 	}
 
-	connType := args[1]
+	port := args[1]
 
-	address := "127.0.0.1:8081"
+	mainAddress := "127.0.0.1:8080"
+	nodeAddress := "127.0.0.1:" + port
 
-	if connType == "server" {
-		startServer()
-	} else if connType == "client" {
-		startClient(address)
-	} else {
-		log.Println("please provide the argument (server or client)")
-	}
-
+	go startServer(nodeAddress)
+	go startClient(mainAddress)
 }
 
 func startClient(address string) {
@@ -53,39 +50,48 @@ func startClient(address string) {
 	}
 }
 
-func startServer() {
+func startServer(serverAddress string) {
 	fmt.Println("Starting...")
 
-	ln, err := net.Listen("tcp", ":8081")
+	ln, err := net.Listen("tcp", serverAddress)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer ln.Close()
 
 	for {
-		connServer, err := ln.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			log.Println("Failed to accept connection:", err)
 			continue
 		}
-		fmt.Printf("New client connected: %s\n", connServer.RemoteAddr().String())
+		fmt.Printf("New client connected: %s\n", conn.RemoteAddr().String())
+		clients = append(clients, conn)
 
-		go handleClient(connServer)
+		go handleClient(conn)
 	}
 }
 
-func handleClient(connServer net.Conn) {
-	defer connServer.Close()
+func handleClient(conn net.Conn) {
+	defer conn.Close()
 
 	for {
-		message, err := bufio.NewReader(connServer).ReadString('\n')
+		message, err := bufio.NewReader(conn).ReadString('\n')
 		if err != nil {
-			fmt.Printf("Client disconnected: %s\n", connServer.RemoteAddr().String())
+			fmt.Printf("Client disconnected: %s\n", conn.RemoteAddr().String())
+
+			for idx := 0; idx < len(clients); idx++ {
+				if clients[idx] == conn {
+					clients = append(clients[:idx], clients[idx+1:]...)
+					break
+				}
+			}
+
 			break
 		}
 
 		fmt.Print("Message Received:" + string(message))
 
-		connServer.Write([]byte(message + "\n"))
+		conn.Write([]byte(message + "\n"))
 	}
 }
